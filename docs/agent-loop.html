@@ -125,10 +125,43 @@ th { font: 600 0.75rem var(--mono); letter-spacing: .06em; text-transform: upper
 tr:last-child td { border-bottom: none; }
 td code { white-space: nowrap; }
 
+/* live run */
+.stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+.stat { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 12px 16px; display: grid; gap: 2px; }
+.stat b { font: 700 1.6rem/1.1 var(--display); font-variant-numeric: tabular-nums; }
+.stat span { font-size: 0.85rem; color: var(--muted); }
+.stat.good b { color: var(--reviewer); }
+.timeline { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.timeline > li { display: grid; gap: 8px; }
+.ev { display: grid; grid-template-columns: 112px minmax(0, 1fr) auto; gap: 12px; align-items: start;
+  background: var(--surface); border: 1px solid var(--line); border-left: 4px solid var(--c, var(--line));
+  border-radius: 8px; padding: 10px 14px; }
+.ev .who { font: 600 0.8rem/1.5 var(--mono); color: var(--c, var(--muted)); }
+.ev .who small { display: block; font-weight: 400; color: var(--muted); }
+.ev .what { display: grid; gap: 4px; min-width: 0; }
+.ev .what .mono { color: var(--muted); font-size: 0.78rem; overflow-wrap: anywhere; }
+.ev .turns { font: 500 0.78rem var(--mono); color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.timeline .pair { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.pair .ev { grid-template-columns: minmax(0, 1fr) auto; }
+.pair .ev .who { grid-column: 1 / -1; }
+.pairlabel { font: 500 0.72rem var(--mono); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.ev.wait { --c: var(--muted); background: var(--soft); border-style: dashed; border-left-style: solid; }
+.ev.gate { --c: var(--reviewer); background: color-mix(in srgb, var(--reviewer) 9%, var(--surface)); }
+.lessons { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.lesson { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; display: grid; gap: 6px; align-content: start; }
+.lesson .bad { color: var(--err); font: 600 0.72rem var(--mono); letter-spacing: .06em; text-transform: uppercase; }
+.lesson p { font-size: 0.93rem; }
+.lesson .fix { color: var(--muted); }
+.lesson .fix b { color: var(--ink); font-weight: 600; }
+
 @media (max-width: 760px) {
   .panels { grid-template-columns: 1fr; }
   .panels > div + div { border-left: none; border-top: 1px solid var(--line); }
   .adapters { grid-template-columns: 1fr; }
+  .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .lessons, .timeline .pair { grid-template-columns: 1fr; }
+  .ev { grid-template-columns: minmax(0, 1fr) auto; }
+  .ev .who { grid-column: 1 / -1; }
 }
 @media (prefers-reduced-motion: reduce) {
   .edge.on { animation: none; }
@@ -140,7 +173,7 @@ td code { white-space: nowrap; }
 <header>
   <span class="eyebrow">agentic-project · walkthrough</span>
   <h1>Inside the Agent Loop</h1>
-  <p>Two step-through diagrams built from the real traces of <code>demo_single.py</code> and <code>demo_multi.py</code>. Press <b>Next</b> or <b>Play</b> and watch what each part of the system does at every step.</p>
+  <p>Two step-through diagrams built from the real traces of <code>demo_single.py</code> and <code>demo_multi.py</code>, followed by a real run where Gemini made every decision. Press <b>Next</b> or <b>Play</b> and watch what each part of the system does at every step.</p>
   <div class="formula">agent = <b>LLM</b> + <b>tools</b> + <b>a loop</b></div>
 </header>
 
@@ -272,9 +305,75 @@ td code { white-space: nowrap; }
   </div>
 </section>
 
-<!-- ============ 3. SWAPPING THE MODEL ============ -->
+<!-- ============ 3. LIVE GEMINI RUN ============ -->
+<section id="live">
+  <span class="eyebrow">Part 3 · demo_multi.py --gemini</span>
+  <h2>The same flow, live: Gemini makes every decision</h2>
+  <p class="lede">Part 2 replays scripted decisions. Here nothing was scripted: <code>gemini-3.5-flash-lite</code> chose every delegation, tool call and fix. After the orchestrator reported, a check written in plain Python ran the tests itself. The run took about 3 minutes, most of it waiting out the free tier's rate limit.</p>
+
+  <div class="stats">
+    <div class="stat"><b>32</b><span>model calls across all agents</span></div>
+    <div class="stat"><b>6</b><span>worker runs, each with a fresh context</span></div>
+    <div class="stat"><b>78 s</b><span>waiting on the rate limit (15 requests/min)</span></div>
+    <div class="stat good"><b>7 / 7</b><span>acceptance cases passed in round 1</span></div>
+  </div>
+
+  <ol class="timeline" aria-label="Live run, in order">
+    <li><div class="ev" style="--c: var(--orch)"><span class="who">orchestrator</span>
+      <div class="what"><b>Sends the job to the coder first</b><span class="mono">ask_coder("Create palindrome.py with is_palindrome(s) function that ignores case, spaces and punctuation.")</span></div>
+      <span class="turns">turn 1</span></div></li>
+    <li><div class="ev" style="--c: var(--coder)"><span class="who">coder<small>run 1</small></span>
+      <div class="what"><b>Writes the code and a test file, then runs the tests</b><span class="mono">write_file palindrome.py · write_file test_palindrome.py · run_python → exit code 0</span></div>
+      <span class="turns">5 turns</span></div></li>
+    <li><span class="pairlabel">in parallel · orchestrator turn 2</span>
+      <div class="pair" style="display:grid; gap:8px">
+        <div class="ev" style="--c: var(--tester)"><span class="who">tester</span>
+          <div class="what"><b>Runs the tests: all 5 pass</b><span class="mono">read_file ×2 · run_python → exit code 0. Leaves the code alone.</span></div>
+          <span class="turns">5 turns</span></div>
+        <div class="ev" style="--c: var(--reviewer)"><span class="who">reviewer</span>
+          <div class="what"><b>Finds no bugs and suggests improvements</b><span class="mono">read_file ×2 · read-only, so it can only report</span></div>
+          <span class="turns">4 turns</span></div>
+      </div></li>
+    <li><div class="ev wait"><span class="who">rate limit</span>
+      <div class="what"><b>Waits 18 s, then 60 s</b><span class="mono">Gemini returned 429 twice; llm.py sleeps for the delay the API asks for, then retries</span></div>
+      <span class="turns">78 s</span></div></li>
+    <li><div class="ev" style="--c: var(--orch)"><span class="who">orchestrator</span>
+      <div class="what"><b>Turns the review into a refactor request</b><span class="mono">ask_coder("Refactor palindrome.py to include enhanced docstrings and optimized two-pointer/clean logic, and update test_palindrome.py if needed.")</span></div>
+      <span class="turns">turn 3</span></div></li>
+    <li><div class="ev" style="--c: var(--coder)"><span class="who">coder<small>run 2 · fresh context</small></span>
+      <div class="what"><b>Re-reads the files, since it remembers nothing from run 1, and refactors</b><span class="mono">two-pointer loop · TypeError for inputs that aren't strings · new docstrings · updated tests · run_python ×3 → exit code 0</span></div>
+      <span class="turns">9 turns</span></div></li>
+    <li><div class="ev" style="--c: var(--tester)"><span class="who">tester<small>run 2</small></span>
+      <div class="what"><b>Confirms the tests still pass after the refactor</b><span class="mono">ask_tester("Run test_palindrome.py to confirm all tests pass after refactoring.") → all pass</span></div>
+      <span class="turns">4 turns</span></div></li>
+    <li><div class="ev" style="--c: var(--orch)"><span class="who">orchestrator</span>
+      <div class="what"><b>Reports: built, tested and reviewed</b><span class="mono">no tool call, so its loop ends</span></div>
+      <span class="turns">turn 5</span></div></li>
+    <li><div class="ev gate"><span class="who">check<small>plain Python</small></span>
+      <div class="what"><b>Accepted in round 1</b><span class="mono">Acceptance cases: 7/7 passed · test_palindrome.py: passed. A failure here would have sent the task back to the orchestrator, for up to 3 rounds.</span></div>
+      <span class="turns">round 1</span></div></li>
+  </ol>
+
+  <h3>What earlier live runs got wrong, and the fix for each</h3>
+  <div class="lessons">
+    <div class="lesson"><span class="bad">Two agents, one file</span>
+      <p>The orchestrator started the coder and tester together, and both wrote <code>palindrome.py</code>, overwriting each other.</p>
+      <p class="fix"><b>Fix:</b> the orchestrator is told code must exist before it is tested, and the tester may never edit the code it tests.</p></div>
+    <div class="lesson"><span class="bad">A confident, wrong report</span>
+      <p>The orchestrator reported success while 1 of 6 tests failed. An agent had written a test claiming "öko" is a palindrome.</p>
+      <p class="fix"><b>Fix:</b> the check in plain Python runs the tests itself instead of trusting the report.</p></div>
+    <div class="lesson"><span class="bad">A worker that never finished</span>
+      <p>In its second run the coder went on a Unicode side-quest and used all 15 of its turns without giving an answer.</p>
+      <p class="fix"><b>Fix:</b> <code>max_turns</code> in <code>agent.py</code> stops it, so one stuck worker can't stall the whole run.</p></div>
+    <div class="lesson"><span class="bad">Tests the check didn't run</span>
+      <p>The tester named its file <code>comprehensive_test.py</code>, and the check only looked for <code>test_*.py</code>.</p>
+      <p class="fix"><b>Fix:</b> the check now runs any <code>*test*.py</code>, and the prompts ask for <code>test_&lt;module&gt;.py</code>.</p></div>
+  </div>
+</section>
+
+<!-- ============ 4. SWAPPING THE MODEL ============ -->
 <section id="brains">
-  <span class="eyebrow">Part 3 · agentic/llm.py</span>
+  <span class="eyebrow">Part 4 · agentic/llm.py</span>
   <h2>Swapping the model only changes the adapter</h2>
   <p class="lede">The loop in <code>agent.py</code> keeps messages in one neutral shape. Each backend class translates that shape to its provider's API and back. Choose one with a flag.</p>
   <div class="hub">agent.py loop ⟷ <b>llm.respond(system, messages, tools)</b></div>
@@ -309,6 +408,7 @@ td code { white-space: nowrap; }
         <tr><td><code>agentic/agent.py</code> · <code>Agent.run</code></td><td>The loop: think, act (tool calls run in parallel on a thread pool), observe</td></tr>
         <tr><td><code>agentic/agent.py</code> · <code>as_tool</code></td><td>Wraps an agent so another agent can call it as a tool</td></tr>
         <tr><td><code>agentic/tools.py</code></td><td>Tools are a Python function and a JSON schema. File access is limited to <code>workspace/</code></td></tr>
+        <tr><td><code>demo_multi.py</code> · <code>verify</code></td><td>The check: fixed acceptance cases plus every <code>*test*.py</code> the agents wrote, run in plain Python after the orchestrator reports</td></tr>
         <tr><td><code>agentic/llm.py</code></td><td>Mock, Claude and Gemini backends behind one <code>respond()</code> method</td></tr>
       </tbody>
     </table>
