@@ -101,10 +101,12 @@ def build(argv: list) -> Agent:
         return pick_llm(argv, script)
 
     coder = Agent("coder", "You are a Python developer. Write clean code to the workspace. "
-                  "When asked to fix something, fix it and re-run any tests.",
+                  "When asked to fix something, fix it and re-run any tests. "
+                  "Name any test file test_<module>.py.",
                   [WRITE_FILE, READ_FILE, RUN_PYTHON, LIST_FILES], llm(MOCK_CODER))
     tester = Agent("tester", "You are a QA engineer. Write a runnable test script (plain asserts/prints, "
-                   "no pytest), run it, and report exactly what passed and failed. Never create or edit the "
+                   "no pytest) named test_<module>.py, exit with a non-zero code if any test fails, run it, "
+                   "and report exactly what passed and failed. Never create or edit the "
                    "code under test; if it is missing or broken, report that instead.",
                    [WRITE_FILE, READ_FILE, RUN_PYTHON, LIST_FILES], llm(MOCK_TESTER))
     reviewer = Agent("reviewer", "You are a strict code reviewer. Read the code and list concrete issues "
@@ -129,7 +131,7 @@ def build(argv: list) -> Agent:
 # code that the model can't skip or argue with. Two checks:
 #   1. Our own acceptance cases, taken from the spec. They live here, outside
 #      workspace/, so no agent can edit them to make them pass.
-#   2. Every test_*.py the agents wrote (those tests can be wrong too).
+#   2. Every *test*.py the agents wrote (those tests can be wrong too).
 
 ACCEPTANCE = {
     "racecar": True,
@@ -164,7 +166,8 @@ def verify() -> tuple[bool, str]:
     else:
         lines.append(f"Acceptance cases: {len(ACCEPTANCE)}/{len(ACCEPTANCE)} passed")
 
-    for test in sorted(WORKSPACE.glob("test_*.py")):
+    # Match any name with "test" in it: agents don't always follow test_*.py.
+    for test in sorted(WORKSPACE.glob("*test*.py")):
         proc = _run([test.name])
         if proc.returncode == 0:
             lines.append(f"{test.name}: passed")

@@ -74,7 +74,7 @@ Patterns shown in `demo_multi.py`:
 | **Orchestrator–worker** | the orchestrator never writes code; it only delegates |
 | **Parallel fan-out** | tester and reviewer run at the same time (two tool calls in one turn) |
 | **Evaluator–optimizer loop** | failed tests and review notes go back to the coder, who fixes and re-runs |
-| **Verification gate** | after the orchestrator reports, plain Python runs fixed acceptance cases plus every `test_*.py`; a failure sends the task back (up to 3 rounds) |
+| **Verification gate** | after the orchestrator reports, plain Python runs fixed acceptance cases plus every `*test*.py` the agents wrote; a failure sends the task back (up to 3 rounds) |
 
 ## When *not* to use agents
 
