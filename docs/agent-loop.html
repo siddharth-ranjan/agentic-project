@@ -1,0 +1,459 @@
+<title>Inside the Agent Loop</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Schibsted+Grotesk:wght@600;700;800&display=swap">
+<style>
+:root {
+  --bg: #F2F4F3; --surface: #FFFFFF; --ink: #17201D; --muted: #5A6661; --line: #C3CCC8;
+  --soft: #E6EBE8; --accent: #2F4AD0;
+  --orch: #9A3B9E; --coder: #A1650E; --tester: #0E7B88; --reviewer: #377A37; --err: #B3261E;
+  --display: "Schibsted Grotesk", "Helvetica Neue", Arial, sans-serif;
+  --body: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #111614; --surface: #1A211E; --ink: #E4EAE7; --muted: #9AA6A1; --line: #3A4641;
+    --soft: #232C28; --accent: #8FA3FF;
+    --orch: #D48AD8; --coder: #E0A94E; --tester: #5CC5D1; --reviewer: #83C983; --err: #F28B82;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #111614; --surface: #1A211E; --ink: #E4EAE7; --muted: #9AA6A1; --line: #3A4641;
+  --soft: #232C28; --accent: #8FA3FF;
+  --orch: #D48AD8; --coder: #E0A94E; --tester: #5CC5D1; --reviewer: #83C983; --err: #F28B82;
+}
+
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--ink); font: 16px/1.6 var(--body); }
+.wrap { max-width: 1000px; margin: 0 auto; padding-inline: 20px; padding-block: 40px 72px; }
+h1, h2, h3 { font-family: var(--display); line-height: 1.15; text-wrap: balance; margin: 0; }
+h1 { font-size: clamp(2rem, 5vw, 3rem); font-weight: 800; letter-spacing: -0.02em; }
+h2 { font-size: 1.6rem; font-weight: 700; letter-spacing: -0.01em; }
+h3 { font-size: 1.05rem; font-weight: 700; }
+p { margin: 0; max-width: 68ch; }
+code, .mono { font-family: var(--mono); font-size: 0.88em; }
+p code { background: var(--soft); padding: 1px 5px; border-radius: 4px; }
+.eyebrow { font: 500 0.75rem/1 var(--mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+
+header { display: grid; gap: 14px; margin-bottom: 44px; }
+header p { color: var(--muted); font-size: 1.08rem; }
+.formula { font-family: var(--mono); font-size: 1rem; color: var(--ink); background: var(--surface);
+  border: 1px solid var(--line); border-radius: 8px; padding: 10px 14px; width: fit-content; max-width: 100%; }
+.formula b { color: var(--accent); font-weight: 500; }
+
+section { display: grid; gap: 18px; padding-block: 36px; border-top: 1px solid var(--line); }
+.lede { color: var(--muted); }
+
+/* diagrams */
+.stage { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+.diagram { overflow-x: auto; padding: 14px 10px 4px; }
+.diagram svg { display: block; width: 100%; min-width: 600px; height: auto; }
+svg text { fill: var(--ink); font-family: var(--body); }
+svg .sub { fill: var(--muted); font-size: 12px; }
+svg .mono { font-family: var(--mono); font-size: 11px; fill: var(--muted); }
+svg .title { font-family: var(--display); font-weight: 700; font-size: 16px; }
+.node rect, .node polygon { fill: var(--surface); stroke: var(--line); stroke-width: 1.5; transition: fill .25s, stroke .25s; }
+.node .bar { fill: var(--c, var(--accent)); stroke: none; opacity: .35; transition: opacity .25s; }
+.node.on rect.box { fill: color-mix(in srgb, var(--c, var(--accent)) 13%, var(--surface)); stroke: var(--c, var(--accent)); stroke-width: 2.5; }
+.node.on .bar { opacity: 1; }
+.node.dim { opacity: .55; }
+.edge { fill: none; stroke: var(--line); stroke-width: 1.8; marker-end: url(#arrow); transition: stroke .25s; }
+.edge.on { stroke: var(--accent); stroke-width: 2.4; stroke-dasharray: 7 5; marker-end: url(#arrow-on); animation: flow .6s linear infinite; }
+.elabel { font: 500 11px var(--mono); fill: var(--muted); }
+.elabel.on { fill: var(--accent); }
+#arrow path { fill: var(--line); } #arrow-on path { fill: var(--accent); }
+@keyframes flow { to { stroke-dashoffset: -12; } }
+.ctx { font: 500 11px var(--mono); }
+.badge rect { fill: var(--c); } .badge text { fill: var(--surface); font: 600 10px var(--mono); }
+.file rect { fill: var(--soft); stroke: var(--line); }
+.file.fail rect { stroke: var(--err); } .file.fail text.st { fill: var(--err); }
+.file.pass rect { stroke: var(--reviewer); } .file.pass text.st { fill: var(--reviewer); }
+.file text { font: 500 11px var(--mono); }
+
+/* controls + panels */
+.controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 12px 14px; border-top: 1px solid var(--line); background: var(--soft); }
+button { font: 500 0.9rem var(--body); color: var(--ink); background: var(--surface); border: 1px solid var(--line);
+  border-radius: 7px; padding: 6px 14px; cursor: pointer; }
+button:hover { border-color: var(--accent); }
+button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+button:disabled { opacity: .4; cursor: default; border-color: var(--line); }
+button.primary { background: var(--accent); color: var(--surface); border-color: var(--accent); }
+.counter { font: 500 0.85rem var(--mono); color: var(--muted); margin-left: auto; font-variant-numeric: tabular-nums; }
+.dots { display: flex; gap: 4px; flex-wrap: wrap; }
+.dots i { width: 8px; height: 8px; border-radius: 50%; background: var(--line); }
+.dots i.on { background: var(--accent); }
+
+.panels { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr); border-top: 1px solid var(--line); }
+.panels > div { padding: 18px 20px; display: grid; gap: 10px; align-content: start; min-width: 0; }
+.panels > div + div { border-left: 1px solid var(--line); }
+.explain h3 { color: var(--ink); }
+.explain p { color: var(--ink); }
+.phase { font: 600 0.72rem/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--accent); }
+
+.msgs { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.msgs li { display: grid; grid-template-columns: 76px minmax(0, 1fr); gap: 10px; align-items: start;
+  font: 0.8rem/1.45 var(--mono); padding: 6px 8px; border-radius: 6px; border: 1px solid transparent; }
+.msgs li.new { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, var(--surface)); }
+.msgs .role { font-weight: 500; }
+.msgs .role.user { color: var(--muted); } .msgs .role.assistant { color: var(--accent); }
+.msgs .body { overflow-wrap: anywhere; }
+.blk { display: inline-block; font-size: 0.72rem; padding: 0 5px; border-radius: 4px; background: var(--soft); margin-right: 4px; }
+.blk.tu { background: color-mix(in srgb, var(--accent) 18%, var(--surface)); }
+.blk.tr { background: color-mix(in srgb, var(--reviewer) 18%, var(--surface)); }
+
+.trace { margin: 0; font: 0.78rem/1.55 var(--mono); background: var(--bg); border: 1px solid var(--line); border-radius: 8px;
+  padding: 10px 12px; overflow-x: auto; white-space: pre; }
+.trace .orchestrator { color: var(--orch); } .trace .coder { color: var(--coder); }
+.trace .tester { color: var(--tester); } .trace .reviewer { color: var(--reviewer); }
+.trace .fail { color: var(--err); }
+
+/* adapters + comparison */
+.adapters { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.adapter { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; display: grid; gap: 8px; align-content: start; }
+.adapter .flag { font: 500 0.78rem var(--mono); color: var(--accent); }
+.adapter ul { margin: 0; padding-left: 18px; font-size: 0.9rem; color: var(--muted); display: grid; gap: 4px; }
+.adapter ul code { color: var(--ink); }
+.hub { text-align: center; font: 500 0.85rem var(--mono); color: var(--muted); }
+
+table { border-collapse: collapse; width: 100%; font-size: 0.93rem; }
+.tablewrap { overflow-x: auto; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; }
+th, td { text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font: 600 0.75rem var(--mono); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+tr:last-child td { border-bottom: none; }
+td code { white-space: nowrap; }
+
+@media (max-width: 760px) {
+  .panels { grid-template-columns: 1fr; }
+  .panels > div + div { border-left: none; border-top: 1px solid var(--line); }
+  .adapters { grid-template-columns: 1fr; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .edge.on { animation: none; }
+  * { transition: none !important; }
+}
+</style>
+
+<div class="wrap">
+<header>
+  <span class="eyebrow">agentic-project · walkthrough</span>
+  <h1>Inside the Agent Loop</h1>
+  <p>Two step-through diagrams built from the real traces of <code>demo_single.py</code> and <code>demo_multi.py</code>. Press <b>Next</b> or <b>Play</b> and watch what each part of the system does at every step.</p>
+  <div class="formula">agent = <b>LLM</b> + <b>tools</b> + <b>a loop</b></div>
+</header>
+
+<!-- ============ 1. SINGLE AGENT ============ -->
+<section id="loop">
+  <span class="eyebrow">Part 1 · demo_single.py</span>
+  <h2>One agent: think, act, observe, repeat</h2>
+  <p class="lede">The model never runs anything. It asks for a tool, your code runs it, and the result is added to the conversation. The <b>messages</b> list on the right is the agent's entire memory. Watch it grow.</p>
+
+  <div class="stage">
+    <div class="diagram">
+      <svg viewBox="0 0 660 300" role="img" aria-label="Agent loop: task goes to the model; the model either returns a final answer or requests a tool; your code runs the tool; the result is appended and sent back to the model.">
+        <defs>
+          <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z"/></marker>
+          <marker id="arrow-on" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z"/></marker>
+        </defs>
+
+        <path class="edge" id="e-task" d="M140,150 C185,150 190,60 228,56"/>
+        <path class="edge" id="e-final" d="M402,52 L468,52"/>
+        <path class="edge" id="e-tool" d="M402,72 C470,90 540,150 552,214"/>
+        <path class="edge" id="e-obs" d="M468,248 L402,248"/>
+        <path class="edge" id="e-back" d="M300,214 L300,86"/>
+        <text class="elabel" id="l-final" x="410" y="40">no tool_use</text>
+        <text class="elabel" id="l-tool" x="496" y="120">tool_use</text>
+        <text class="elabel" id="l-back" x="190" y="155">loop again</text>
+
+        <g class="node" id="n-task"><rect class="box" x="16" y="118" width="124" height="64" rx="8"/><rect class="bar" x="16" y="118" width="5" height="64" rx="2"/>
+          <text class="title" x="32" y="145">Task</text><text class="sub" x="32" y="166">user message</text></g>
+        <g class="node" id="n-model"><rect class="box" x="230" y="20" width="172" height="66" rx="8"/><rect class="bar" x="230" y="20" width="5" height="66" rx="2"/>
+          <text class="title" x="246" y="46">Model · THINK</text><text class="mono" x="246" y="68">llm.respond(messages)</text></g>
+        <g class="node" id="n-final"><rect class="box" x="470" y="20" width="172" height="66" rx="8"/><rect class="bar" x="470" y="20" width="5" height="66" rx="2"/>
+          <text class="title" x="486" y="46">Final answer</text><text class="mono" x="486" y="68">stop_reason: end_turn</text></g>
+        <g class="node" id="n-tool"><rect class="box" x="470" y="216" width="172" height="66" rx="8"/><rect class="bar" x="470" y="216" width="5" height="66" rx="2"/>
+          <text class="title" x="486" y="242">Your code · ACT</text><text class="mono" x="486" y="264">tool.fn(**input)</text></g>
+        <g class="node" id="n-obs"><rect class="box" x="230" y="216" width="172" height="66" rx="8"/><rect class="bar" x="230" y="216" width="5" height="66" rx="2"/>
+          <text class="title" x="246" y="242">OBSERVE</text><text class="mono" x="246" y="264">append tool_result</text></g>
+      </svg>
+    </div>
+    <div class="controls">
+      <button id="l-prev" type="button">Back</button>
+      <button id="l-next" type="button" class="primary">Next</button>
+      <button id="l-play" type="button">Play</button>
+      <button id="l-reset" type="button">Restart</button>
+      <div class="dots" id="l-dots" aria-hidden="true"></div>
+      <span class="counter" id="l-count"></span>
+    </div>
+    <div class="panels">
+      <div class="explain" aria-live="polite">
+        <span class="phase" id="l-phase"></span>
+        <h3 id="l-title"></h3>
+        <p id="l-detail"></p>
+      </div>
+      <div>
+        <span class="eyebrow">messages[] · what the model sees next call</span>
+        <ul class="msgs" id="l-msgs"></ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 2. MULTI AGENT ============ -->
+<section id="multi">
+  <span class="eyebrow">Part 2 · demo_multi.py</span>
+  <h2>Many agents: an orchestrator with specialist workers</h2>
+  <p class="lede">Each worker is a whole agent wrapped as a tool (<code>as_tool()</code>). It gets its own prompt, its own tools and a <b>fresh, empty context</b>. Only its final answer travels back up. The workers share work through files in the workspace, not through memory.</p>
+
+  <div class="stage">
+    <div class="diagram">
+      <svg viewBox="0 0 680 420" role="img" aria-label="Orchestrator at top delegates to coder, tester and reviewer; each returns a short answer; workers read and write files in a shared workspace.">
+        <path class="edge" id="d-coder" d="M262,96 C200,110 130,130 110,166"/>
+        <path class="edge" id="r-coder" d="M140,166 C170,135 225,118 280,98"/>
+        <path class="edge" id="d-tester" d="M330,98 L330,166"/>
+        <path class="edge" id="r-tester" d="M352,166 L352,98"/>
+        <path class="edge" id="d-reviewer" d="M418,96 C480,110 550,130 570,166"/>
+        <path class="edge" id="r-reviewer" d="M540,166 C510,135 455,118 400,98"/>
+        <path class="edge" id="w-coder" d="M115,264 C120,300 170,320 196,330"/>
+        <path class="edge" id="w-tester" d="M340,264 L340,328"/>
+        <path class="edge" id="w-reviewer" d="M565,264 C560,300 510,320 484,330"/>
+        <text class="elabel" id="lb-d" x="150" y="118">ask_coder(task)</text>
+        <text class="elabel" id="lb-p" x="400" y="140">tasks down · answers up</text>
+
+        <g class="node" id="a-orch" style="--c: var(--orch)"><rect class="box" x="240" y="16" width="200" height="82" rx="8"/><rect class="bar" x="240" y="16" width="5" height="82" rx="2"/>
+          <text class="title" x="256" y="42">orchestrator</text>
+          <text class="mono" x="256" y="62">tools: ask_coder, ask_tester,</text><text class="mono" x="256" y="76">ask_reviewer (no code tools)</text>
+          <text class="ctx" x="256" y="92" id="c-orch" style="fill: var(--orch)"></text></g>
+
+        <g class="node" id="a-coder" style="--c: var(--coder)"><rect class="box" x="20" y="168" width="190" height="96" rx="8"/><rect class="bar" x="20" y="168" width="5" height="96" rx="2"/>
+          <text class="title" x="36" y="194">coder</text>
+          <text class="mono" x="36" y="214">write_file read_file</text><text class="mono" x="36" y="228">run_python list_files</text>
+          <text class="ctx" x="36" y="252" id="c-coder" style="fill: var(--coder)"></text>
+          <g class="badge" id="b-coder" style="--c: var(--coder)"><rect x="128" y="178" width="72" height="18" rx="9"/><text x="136" y="191">run 2 · new</text></g></g>
+
+        <g class="node" id="a-tester" style="--c: var(--tester)"><rect class="box" x="245" y="168" width="190" height="96" rx="8"/><rect class="bar" x="245" y="168" width="5" height="96" rx="2"/>
+          <text class="title" x="261" y="194">tester</text>
+          <text class="mono" x="261" y="214">write_file read_file</text><text class="mono" x="261" y="228">run_python list_files</text>
+          <text class="ctx" x="261" y="252" id="c-tester" style="fill: var(--tester)"></text></g>
+
+        <g class="node" id="a-reviewer" style="--c: var(--reviewer)"><rect class="box" x="470" y="168" width="190" height="96" rx="8"/><rect class="bar" x="470" y="168" width="5" height="96" rx="2"/>
+          <text class="title" x="486" y="194">reviewer</text>
+          <text class="mono" x="486" y="214">read_file list_files</text><text class="mono" x="486" y="228">(read-only)</text>
+          <text class="ctx" x="486" y="252" id="c-reviewer" style="fill: var(--reviewer)"></text></g>
+
+        <g class="node" id="a-ws" style="--c: var(--muted)"><rect class="box" x="150" y="330" width="380" height="76" rx="8"/>
+          <text class="sub" x="166" y="350">workspace/  · shared files</text>
+          <g class="file" id="f-pal"><rect x="166" y="360" width="170" height="34" rx="5"/><text x="176" y="375">palindrome.py</text><text class="st" x="176" y="389" id="f-pal-st"></text></g>
+          <g class="file" id="f-test"><rect x="346" y="360" width="170" height="34" rx="5"/><text x="356" y="375">test_palindrome.py</text><text class="st" x="356" y="389" id="f-test-st"></text></g>
+        </g>
+      </svg>
+    </div>
+    <div class="controls">
+      <button id="m-prev" type="button">Back</button>
+      <button id="m-next" type="button" class="primary">Next</button>
+      <button id="m-play" type="button">Play</button>
+      <button id="m-reset" type="button">Restart</button>
+      <div class="dots" id="m-dots" aria-hidden="true"></div>
+      <span class="counter" id="m-count"></span>
+    </div>
+    <div class="panels">
+      <div class="explain" aria-live="polite">
+        <span class="phase" id="m-phase"></span>
+        <h3 id="m-title"></h3>
+        <p id="m-detail"></p>
+      </div>
+      <div>
+        <span class="eyebrow">terminal trace for this step</span>
+        <pre class="trace" id="m-trace"></pre>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 3. SWAPPING THE MODEL ============ -->
+<section id="brains">
+  <span class="eyebrow">Part 3 · agentic/llm.py</span>
+  <h2>Swapping the model only changes the adapter</h2>
+  <p class="lede">The loop in <code>agent.py</code> keeps messages in one neutral shape. Each backend class translates that shape to its provider's API and back. Choose one with a flag.</p>
+  <div class="hub">agent.py loop ⟷ <b>llm.respond(system, messages, tools)</b></div>
+  <div class="adapters">
+    <div class="adapter"><h3>MockLLM</h3><span class="flag">no flag · offline</span>
+      <ul><li>Replays a scripted list of replies</li><li>Tools still run for real</li><li>Good for learning and for tests</li></ul></div>
+    <div class="adapter"><h3>GeminiLLM</h3><span class="flag">--gemini · gemini-3.5-flash-lite</span>
+      <ul><li><code>tool_use</code> ⟶ <code>function_call</code> part</li><li><code>tool_result</code> ⟶ <code>function_response</code> part</li><li><code>assistant</code> ⟶ role <code>model</code></li><li>Sends the original part back so its <code>thought_signature</code> is kept</li></ul></div>
+    <div class="adapter"><h3>ClaudeLLM</h3><span class="flag">--live · claude-opus-5</span>
+      <ul><li>Neutral shape is Claude's native one, so it needs no translation</li><li>Content blocks go straight back into <code>messages</code></li></ul></div>
+  </div>
+</section>
+
+<!-- ============ 4. WHEN TO USE WHAT ============ -->
+<section id="choose">
+  <span class="eyebrow">Choosing a design</span>
+  <h2>Workflow, agent, or several agents?</h2>
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>Design</th><th>Who decides the next step</th><th>Use it when</th><th>Cost</th></tr></thead>
+      <tbody>
+        <tr><td><b>Workflow</b></td><td>Your code, in a fixed order</td><td>The steps are known ahead of time (draft → review → fix)</td><td>Lowest and predictable</td></tr>
+        <tr><td><b>Single agent</b></td><td>The model, one turn at a time</td><td>The path depends on what it finds along the way</td><td>Grows with the number of turns</td></tr>
+        <tr><td><b>Orchestrator + workers</b></td><td>A lead model delegates to specialists</td><td>The work splits into parts that need different roles, tools, or a clean context, or can run in parallel</td><td>Highest; each worker is a full agent run</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>Where to read the code</th><th>What's there</th></tr></thead>
+      <tbody>
+        <tr><td><code>agentic/agent.py</code> · <code>Agent.run</code></td><td>The loop: think, act (tool calls run in parallel on a thread pool), observe</td></tr>
+        <tr><td><code>agentic/agent.py</code> · <code>as_tool</code></td><td>Wraps an agent so another agent can call it as a tool</td></tr>
+        <tr><td><code>agentic/tools.py</code></td><td>Tools are a Python function and a JSON schema. File access is limited to <code>workspace/</code></td></tr>
+        <tr><td><code>agentic/llm.py</code></td><td>Mock, Claude and Gemini backends behind one <code>respond()</code> method</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+</div>
+
+<script>
+function stepper(prefix, steps, render) {
+  let i = 0, timer = null;
+  const $ = id => document.getElementById(prefix + id);
+  const dots = $("-dots");
+  dots.innerHTML = steps.map(() => "<i></i>").join("");
+  function show(n) {
+    i = Math.max(0, Math.min(steps.length - 1, n));
+    render(steps[i], i);
+    $("-count").textContent = `step ${i + 1} / ${steps.length}`;
+    [...dots.children].forEach((d, k) => d.classList.toggle("on", k <= i));
+    $("-prev").disabled = i === 0;
+    $("-next").disabled = i === steps.length - 1;
+  }
+  function stop() { clearInterval(timer); timer = null; $("-play").textContent = "Play"; }
+  $("-prev").onclick = () => { stop(); show(i - 1); };
+  $("-next").onclick = () => { stop(); show(i + 1); };
+  $("-reset").onclick = () => { stop(); show(0); };
+  $("-play").onclick = () => {
+    if (timer) return stop();
+    if (i === steps.length - 1) show(0);
+    $("-play").textContent = "Pause";
+    timer = setInterval(() => { if (i >= steps.length - 1) stop(); else show(i + 1); }, 2600);
+  };
+  show(0);
+}
+function setOn(ids, on) {
+  document.querySelectorAll(ids.all).forEach(el => el.classList.toggle("on", on.includes(el.id)));
+}
+const esc = s => s.replace(/&/g, "&amp;").replace(/</g, "&lt;");
+
+/* ---------- Part 1: single agent (real trace) ---------- */
+const MSGS = [
+  ["user", `<span class="blk">text</span>If I invest $1000 at 5% annual compound interest… write interest.py… run it`],
+  ["assistant", `<span class="blk">text</span>I'll compute the closed form first. <span class="blk tu">tool_use</span>calculator(expression="1000 * 1.05 ** 10")`],
+  ["user", `<span class="blk tr">tool_result</span>1628.894626777442`],
+  ["assistant", `<span class="blk">text</span>≈ $1628.89. Now I'll write a script to verify. <span class="blk tu">tool_use</span>write_file(path="interest.py", …)`],
+  ["user", `<span class="blk tr">tool_result</span>wrote 109 chars to workspace/interest.py`],
+  ["assistant", `<span class="blk tu">tool_use</span>run_python(path="interest.py")`],
+  ["user", `<span class="blk tr">tool_result</span>exit code 0 · year 1: $1,050.00 … year 10: $1,628.89`],
+  ["assistant", `<span class="blk">text</span>After 10 years you'd have $1,628.89. The script agrees.`],
+];
+const LOOP = [
+  {ph: "start", n: ["n-task"], e: ["e-task"], m: 1, t: "The task becomes the first message",
+   d: "The conversation starts as one user message. The model has no other memory: everything it knows comes from this list, which is resent on every call."},
+  {ph: "turn 1 · think", n: ["n-model"], e: [], m: 2, t: "The model asks for a tool",
+   d: "The model reads every message and replies with text plus a tool_use block naming calculator and its input. It cannot run the calculator itself."},
+  {ph: "turn 1 · act", n: ["n-tool"], e: ["e-tool"], m: 2, t: "Your code runs the tool",
+   d: "stop_reason is tool_use, so agent.py looks up calculator in its tools and runs the Python function. It returns 1628.894626777442."},
+  {ph: "turn 1 · observe", n: ["n-obs"], e: ["e-obs", "e-back"], m: 3, t: "The result goes back to the model",
+   d: "The output is appended as a tool_result in a new user message, matched to the request by tool_use_id. Then the loop goes around again."},
+  {ph: "turn 2 · think", n: ["n-model"], e: [], m: 4, t: "It decides to verify its answer",
+   d: "With the number in its context, the model chooses to check it by writing a script. It requests write_file."},
+  {ph: "turn 2 · act", n: ["n-tool"], e: ["e-tool"], m: 4, t: "A real file is written",
+   d: "write_file saves interest.py into workspace/. Paths are checked so the agent cannot write anywhere else."},
+  {ph: "turn 2 · observe", n: ["n-obs"], e: ["e-obs", "e-back"], m: 5, t: "Confirmation is appended",
+   d: "The model will see \"wrote 109 chars\". If the write had failed, it would see the error here (is_error: true) and could try something else."},
+  {ph: "turn 3 · think", n: ["n-model"], e: [], m: 6, t: "Run the script",
+   d: "The model requests run_python on the file it just wrote. Each step builds on the results of earlier ones."},
+  {ph: "turn 3 · act", n: ["n-tool"], e: ["e-tool"], m: 6, t: "The script runs in a subprocess",
+   d: "run_python executes interest.py and captures its output: a year-by-year table ending at $1,628.89."},
+  {ph: "turn 3 · observe", n: ["n-obs"], e: ["e-obs", "e-back"], m: 7, t: "The output goes into the context",
+   d: "The whole stdout becomes a tool_result. The context now holds 7 messages."},
+  {ph: "turn 4 · think", n: ["n-model"], e: [], m: 8, t: "No tool this time",
+   d: "Both numbers agree, so the model answers in plain text and requests no tool."},
+  {ph: "done", n: ["n-final"], e: ["e-final"], m: 8, t: "No tool_use, so the loop ends",
+   d: "stop_reason is end_turn, so Agent.run returns the text. Totals: 4 model calls, 3 tool runs, 8 messages."},
+];
+stepper("l", LOOP, s => {
+  setOn({all: "#loop .node"}, s.n);
+  setOn({all: "#loop .edge"}, s.e);
+  document.getElementById("l-final").classList.toggle("on", s.e.includes("e-final"));
+  document.getElementById("l-tool").classList.toggle("on", s.e.includes("e-tool"));
+  document.getElementById("l-back").classList.toggle("on", s.e.includes("e-back"));
+  document.getElementById("l-phase").textContent = s.ph;
+  document.getElementById("l-title").textContent = s.t;
+  document.getElementById("l-detail").textContent = s.d;
+  document.getElementById("l-msgs").innerHTML = MSGS.slice(0, s.m).map((m, k) =>
+    `<li class="${k === s.m - 1 && (s.ph.includes("think") || s.ph.includes("observe") || s.ph === "start") ? "new" : ""}"><span class="role ${m[0]}">${m[0]}</span><span class="body">${m[1]}</span></li>`).join("");
+});
+
+/* ---------- Part 2: multi agent (real trace) ---------- */
+const T = (who, s) => `<span class="${who}">[${who}]</span> ${esc(s)}`;
+const MULTI = [
+  {ph: "delegation", a: ["a-orch"], e: [], c: {orch: 1}, f: {}, t: "The orchestrator gets the task",
+   d: "Its tools are the three workers, so it can only plan and delegate. It cannot write code.",
+   tr: [T("orchestrator", "▶ TASK: Build palindrome.py … tested and reviewed"), T("orchestrator", "💭 Plan: coder writes it, then tester and reviewer check it in parallel.")]},
+  {ph: "delegation", a: ["a-coder"], e: ["d-coder", "w-coder"], c: {orch: 2, coder: 3}, f: {pal: "v1"}, t: "The coder runs its own loop",
+   d: "ask_coder(task) starts a separate agent. Its context starts with just the task text, so it doesn't see the orchestrator's conversation. It writes version 1 of the file.",
+   tr: [T("orchestrator", "🔧 ask_coder({task: 'Create palindrome.py …'})"), "    " + T("coder", "▶ TASK: Create palindrome.py …"), "    " + T("coder", "🔧 write_file(palindrome.py)"), "    " + T("coder", "📥 wrote 81 chars to workspace/palindrome.py")]},
+  {ph: "result", a: ["a-orch"], e: ["r-coder"], c: {orch: 3, coder: 4}, f: {pal: "v1"}, t: "Only the final answer comes back",
+   d: "The coder's 4 messages are discarded. The orchestrator receives one sentence as its tool_result, which keeps its own context small.",
+   tr: ["    " + T("coder", "✅ DONE after 2 turn(s): Wrote palindrome.py (lowercases and strips spaces)."), T("orchestrator", "📥 ask_coder → Wrote palindrome.py (lowercases and strips spaces).")]},
+  {ph: "parallel", a: ["a-tester", "a-reviewer"], e: ["d-tester", "d-reviewer"], c: {orch: 4, coder: 4, tester: 1, reviewer: 1}, f: {pal: "v1"}, t: "Two workers start at the same time",
+   d: "The orchestrator makes two tool calls in one reply. agent.py runs them on a thread pool, so the tester and reviewer work at the same time.",
+   tr: [T("orchestrator", "💭 Code is in. Sending to tester and reviewer at the same time."), T("orchestrator", "🔧 ask_tester({task: 'Write and run test_palindrome.py …'})"), T("orchestrator", "🔧 ask_reviewer({task: 'Review palindrome.py …'})")]},
+  {ph: "parallel", a: ["a-tester", "a-reviewer"], e: ["w-tester", "w-reviewer"], c: {orch: 4, coder: 4, tester: 5, reviewer: 3}, f: {pal: "v1", test: "fail"}, t: "Real tests catch a real bug",
+   d: "The tester writes and runs a test file, and the reviewer reads the code. Their trace lines interleave because both run at once. The punctuation test fails.",
+   tr: ["    " + T("tester", "🔧 write_file(test_palindrome.py)"), "    " + T("reviewer", "🔧 read_file(palindrome.py)"), "    " + T("tester", "🔧 run_python(test_palindrome.py)"), `    ${T("tester", "📥 exit code 1")}`, `             <span class="fail">FAIL 'A man, a plan, a canal: Panama' -&gt; False</span>`, "             4/5 passed"]},
+  {ph: "result", a: ["a-orch"], e: ["r-tester", "r-reviewer"], c: {orch: 5, coder: 4, tester: 6, reviewer: 4}, f: {pal: "v1", test: "fail"}, t: "Both findings come back",
+   d: "Both tool_results return in one user message. The orchestrator now knows about the bug from two independent checks.",
+   tr: ["    " + T("reviewer", "✅ DONE: Issue: only spaces are removed, so commas/colons break the check. Suggest str.isalnum()."), "    " + T("tester", "✅ DONE: 4/5 passed. FAIL: 'A man, a plan, a canal: Panama' returned False.")]},
+  {ph: "feedback loop", a: ["a-coder"], e: ["d-coder"], c: {orch: 6, coder: 1, tester: 6, reviewer: 4}, f: {pal: "v1", test: "fail"}, fresh: true, t: "Back to the coder, with no memory of run 1",
+   d: "Each run of a worker starts empty. The coder does not remember writing v1, so the orchestrator's message has to say what failed and what to re-run.",
+   tr: [T("orchestrator", "💭 Both found the same bug: punctuation isn't stripped. Sending it back to the coder."), T("orchestrator", "🔧 ask_coder({task: \"Fix palindrome.py: it fails on 'A man, a plan…' … run test_palindrome.py\"})")]},
+  {ph: "feedback loop", a: ["a-coder"], e: ["w-coder"], c: {orch: 6, coder: 5, tester: 6, reviewer: 4}, f: {pal: "v2", test: "pass"}, fresh: true, t: "Fix and re-run the tests",
+   d: "The coder writes v2, which keeps only alphanumeric characters, then runs the tester's file from the shared workspace. All 5 tests pass.",
+   tr: ["    " + T("coder", "🔧 write_file(palindrome.py)   # v2, uses isalnum()"), "    " + T("coder", "🔧 run_python(test_palindrome.py)"), "    " + T("coder", "📥 exit code 0 · 5/5 passed")]},
+  {ph: "result", a: ["a-orch"], e: ["r-coder"], c: {orch: 7, coder: 6, tester: 6, reviewer: 4}, f: {pal: "v2", test: "pass"}, fresh: true, t: "The fix is confirmed",
+   d: "The coder reports back in one line. The orchestrator checks it against the goal: the tests pass and the review issue is fixed.",
+   tr: ["    " + T("coder", "✅ DONE: Fixed: now keeps only alphanumeric chars. 5/5 passed."), T("orchestrator", "📥 ask_coder → Fixed … 5/5 passed.")]},
+  {ph: "done", a: ["a-orch"], e: [], c: {orch: 8, coder: 6, tester: 6, reviewer: 4}, f: {pal: "v2", test: "pass"}, fresh: true, t: "Final report",
+   d: "No more tool calls, so the orchestrator's loop ends. It used 8 messages. The four workers used 20 more between them, and none of those had to fit in its context.",
+   tr: [T("orchestrator", "✅ DONE after 4 turn(s): palindrome.py handles case, spaces and punctuation; 5/5 tests pass.")]},
+];
+stepper("m", MULTI, s => {
+  const nodes = ["a-orch", "a-coder", "a-tester", "a-reviewer"];
+  nodes.forEach(id => {
+    const el = document.getElementById(id);
+    el.classList.toggle("on", s.a.includes(id));
+  });
+  document.getElementById("a-ws").classList.toggle("on", s.e.some(e => e.startsWith("w-")));
+  setOn({all: "#multi .edge"}, s.e);
+  document.getElementById("lb-d").classList.toggle("on", s.e.includes("d-coder"));
+  document.getElementById("lb-p").classList.toggle("on", s.e.some(e => /^[dr]-(tester|reviewer)/.test(e)));
+  for (const k of ["orch", "coder", "tester", "reviewer"]) {
+    const n = s.c[k];
+    document.getElementById("c-" + k).textContent = n ? `context: ${n} msg${n > 1 ? "s" : ""}` : "context: (not started)";
+  }
+  document.getElementById("b-coder").style.display = s.fresh ? "" : "none";
+  const pal = document.getElementById("f-pal"), test = document.getElementById("f-test");
+  pal.style.opacity = s.f.pal ? 1 : .35; test.style.opacity = s.f.test ? 1 : .35;
+  document.getElementById("f-pal-st").textContent = s.f.pal === "v2" ? "v2 · strips punctuation" : s.f.pal ? "v1 · strips spaces only" : "not created";
+  document.getElementById("f-test-st").textContent = s.f.test === "pass" ? "5/5 passed" : s.f.test ? "4/5 passed" : "not created";
+  test.classList.toggle("fail", s.f.test === "fail"); test.classList.toggle("pass", s.f.test === "pass");
+  document.getElementById("m-phase").textContent = s.ph;
+  document.getElementById("m-title").textContent = s.t;
+  document.getElementById("m-detail").textContent = s.d;
+  document.getElementById("m-trace").innerHTML = s.tr.join("\n");
+});
+</script>
